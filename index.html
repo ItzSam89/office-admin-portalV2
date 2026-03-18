@@ -138,7 +138,7 @@ tr:hover td{background:rgba(255,255,255,0.018)}
 const {useState,useEffect,useCallback} = React;
 
 /* ── CONFIG — update API to your Render URL ── */
-const API = 'https://office-admin-portal-backend.onrender.com/api';
+const API = 'http://localhost:3001/api';
 
 const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
 const FLOOR_COLORS=['#7c6af7','#4fd1c5','#34d399','#fbbf24','#f472b6','#f87171','#60a5fa','#fb923c','#a78bfa','#34d399'];
@@ -257,16 +257,19 @@ function GroceryTab({month,year,floors,onManageFloors}){
   const [loading,setLoading]=useState(true);
   const [modal,setModal]=useState(null);
   const [editing,setEditing]=useState(null);
+  const [groceryCats,setGroceryCats]=useState([]);
 
   const load=useCallback(async()=>{
     setLoading(true);
     try{
-      const [it,pu,st]=await Promise.all([
+      const [it,pu,st,gc]=await Promise.all([
         api('GET','/grocery/items'),
         api('GET',`/grocery/purchases?month=${month}&year=${year}`),
-        api('GET',`/grocery/stats?month=${month}&year=${year}`)
+        api('GET',`/grocery/stats?month=${month}&year=${year}`),
+        api('GET','/grocery/categories')
       ]);
       setItems(it||[]);setPurchases(pu||[]);setStats(st||null);
+      setGroceryCats((gc||[]).map(c=>({id:c.id,name:c.name})));
     }catch(e){}
     setLoading(false);
   },[month,year]);
@@ -343,6 +346,7 @@ function GroceryTab({month,year,floors,onManageFloors}){
         React.createElement('div',{className:'flex gap-2'},
           React.createElement('button',{className:'btn btn-ghost btn-sm',onClick:onManageFloors},'⚙ Floors'),
           React.createElement('button',{className:'btn btn-ghost btn-sm',onClick:()=>setModal('manageItems')},'⚙ Items'),
+          React.createElement('button',{className:'btn btn-ghost btn-sm',onClick:()=>setModal('manageGCats')},'⚙ Categories'),
           React.createElement('button',{className:'btn btn-primary',onClick:()=>{setEditing(null);setModal('addPurchase')}},'+ Add Purchase')
         )
       ),
@@ -406,7 +410,8 @@ function GroceryTab({month,year,floors,onManageFloors}){
     ),
 
     modal==='addPurchase'&&React.createElement(AddPurchaseModal,{items,floors,month,year,existing:editing,onClose:()=>{setModal(null);setEditing(null)},onSaved:()=>{setModal(null);setEditing(null);load()}}),
-    modal==='manageItems'&&React.createElement(ManageItemsModal,{items,onClose:()=>setModal(null),onSaved:()=>load()})
+    modal==='manageItems'&&React.createElement(ManageItemsModal,{items,groceryCats,onClose:()=>setModal(null),onSaved:()=>load()}),
+    modal==='manageGCats'&&React.createElement(ManageGroceryCatsModal,{cats:groceryCats,onClose:()=>setModal(null),onSaved:()=>load()})
   )
 }
 
@@ -487,16 +492,78 @@ function AddPurchaseModal({items,floors,month,year,existing,onClose,onSaved}){
   )
 }
 
+/* ── MANAGE GROCERY CATEGORIES MODAL ── */
+function ManageGroceryCatsModal({cats,onClose,onSaved}){
+  const [list,setList]=useState([...cats]);
+  const [editId,setEditId]=useState(null);
+  const [editVal,setEditVal]=useState('');
+  const [newVal,setNewVal]=useState('');
+  const [adding,setAdding]=useState(false);
+  const [saving,setSaving]=useState(false);
+
+  async function saveEdit(id){
+    if(!editVal.trim())return;
+    setSaving(true);
+    await api('PUT',`/grocery/categories/${id}`,{name:editVal.trim()});
+    setList(p=>p.map(c=>c.id===id?{...c,name:editVal.trim().toLowerCase()}:c));
+    setEditId(null);setSaving(false);onSaved();
+  }
+  async function del(id){
+    if(!confirm('Delete this category? Items using it will keep the old value.'))return;
+    await api('DELETE',`/grocery/categories/${id}`);
+    setList(p=>p.filter(c=>c.id!==id));onSaved();
+  }
+  async function add(){
+    if(!newVal.trim())return alert('Category name required');
+    setSaving(true);
+    const n=await api('POST','/grocery/categories',{name:newVal.trim()});
+    if(n)setList(p=>[...p,n]);
+    setNewVal('');setAdding(false);setSaving(false);onSaved();
+  }
+
+  return React.createElement(Modal,{title:'⚙ Grocery Categories',onClose},
+    React.createElement('div',{style:{fontSize:'12px',color:'var(--muted)',marginBottom:'8px'}},'Category labels used when adding grocery items. Stored in database — visible on all devices.'),
+    React.createElement('div',{className:'form-divider'}),
+    React.createElement('div',{style:{marginBottom:'16px'}},
+      list.length===0&&React.createElement('div',{style:{textAlign:'center',padding:'20px',color:'var(--muted)'}},'No categories yet. Add one below.'),
+      list.map(cat=>editId===cat.id
+        ?React.createElement('div',{key:cat.id,className:'edit-row'},
+            React.createElement('input',{value:editVal,onChange:e=>setEditVal(e.target.value),onKeyDown:e=>e.key==='Enter'&&saveEdit(cat.id),autoFocus:true,style:{flex:1,background:'var(--surface3)',border:'1px solid var(--accent)',color:'var(--text)',padding:'7px 10px',borderRadius:'8px',fontSize:'13px'}}),
+            React.createElement('button',{className:'btn btn-primary btn-sm',onClick:()=>saveEdit(cat.id),disabled:saving},'✓ Save'),
+            React.createElement('button',{className:'btn btn-ghost btn-sm',onClick:()=>setEditId(null)},'Cancel')
+          )
+        :React.createElement('div',{key:cat.id,className:'manage-row'},
+            React.createElement('div',{style:{flex:1,fontFamily:'Syne,sans-serif',fontWeight:700,fontSize:'13px'}},cat.name),
+            React.createElement('button',{className:'btn btn-ghost btn-sm',onClick:()=>{setEditId(cat.id);setEditVal(cat.name)}},'✎ Edit'),
+            list.length>1&&React.createElement('button',{className:'btn-danger',onClick:()=>del(cat.id)},'✕')
+          )
+      )
+    ),
+    React.createElement('div',{className:'form-divider'}),
+    adding
+      ?React.createElement('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},
+          React.createElement('input',{value:newVal,onChange:e=>setNewVal(e.target.value),onKeyDown:e=>e.key==='Enter'&&add(),placeholder:'e.g. beverages, hygiene...',autoFocus:true,style:{flex:1,background:'var(--surface2)',border:'1px solid var(--accent)',color:'var(--text)',padding:'9px 12px',borderRadius:'9px',fontSize:'14px'}}),
+          React.createElement('button',{className:'btn btn-primary',onClick:add,disabled:saving},saving?'Adding...':'Add'),
+          React.createElement('button',{className:'btn btn-ghost',onClick:()=>setAdding(false)},'Cancel')
+        )
+      :React.createElement('button',{className:'btn btn-ghost',onClick:()=>setAdding(true),style:{width:'100%',justifyContent:'center'}},'+ Add New Category'),
+    React.createElement('div',{className:'form-actions',style:{marginTop:'20px'}},
+      React.createElement('button',{className:'btn btn-primary',onClick:onClose},'Done')
+    )
+  )
+}
+
 /* ── MANAGE ITEMS MODAL ── */
-function ManageItemsModal({items,onClose,onSaved}){
+function ManageItemsModal({items,groceryCats,onClose,onSaved}){
   const [list,setList]=useState(items);
   const [editId,setEditId]=useState(null);
   const [editForm,setEditForm]=useState({});
-  const [addForm,setAddForm]=useState({name:'',unit:'kg',category:'food'});
+  const [addForm,setAddForm]=useState({name:'',unit:'kg',category:''});
+  useEffect(()=>{if(CATS.length>0&&!addForm.category)setAddForm(p=>({...p,category:CATS[0]}))},[CATS.length]);
   const [adding,setAdding]=useState(false);
   const [saving,setSaving]=useState(false);
   const UNITS=['kg','litre','pieces','rolls','packs','boxes','bags','dozen'];
-  const CATS=['food','cleaning','stationary','miscellaneous'];
+  const CATS=groceryCats.map(c=>typeof c==='string'?c:c.name);
   const IS={background:'var(--surface3)',border:'1px solid var(--border)',color:'var(--text)',padding:'7px 8px',borderRadius:'8px',fontSize:'13px'};
   async function saveEdit(id){setSaving(true);await api('PUT',`/grocery/items/${id}`,editForm);setList(p=>p.map(i=>i.id===id?{...i,...editForm}:i));setEditId(null);setSaving(false);onSaved()}
   async function del(id){if(!confirm('Delete item? Past purchases not affected.'))return;await api('DELETE',`/grocery/items/${id}`);setList(p=>p.filter(i=>i.id!==id));onSaved()}
