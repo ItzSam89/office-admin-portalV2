@@ -223,7 +223,7 @@ async function uploadToOneDrive(file, baseFileName) {
     /* add timestamp to filename so re-uploads never conflict */
     const ext = file.name.split('.').pop();
     const ts = new Date().toISOString().replace(/[-:T]/g,'').slice(0,14);
-    const fileName = `${baseFileName.replace(`.${ext}`,''}_${ts}.${ext}`;
+    const fileName = `${baseFileName.replace(`.${ext}`,''}_${ts}.${ext}`);
 
     let tokenResp;
     try {
