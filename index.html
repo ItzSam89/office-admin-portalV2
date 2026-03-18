@@ -218,22 +218,41 @@ async function api(method,path,body){
 /* ── ONEDRIVE UPLOAD via Microsoft Graph ── */
 const ONEDRIVE_FOLDER = 'ADMIN_TEST';
 
-async function uploadToOneDrive(file, fileName) {
+async function uploadToOneDrive(file, baseFileName) {
   try {
-    const tokenResp = await msalInstance.acquireTokenSilent({
-      scopes: ['Files.ReadWrite', 'Files.ReadWrite.All'],
-      account: msalInstance.getActiveAccount()
-    });
+    /* add timestamp to filename so re-uploads never conflict */
+    const ext = file.name.split('.').pop();
+    const ts = new Date().toISOString().replace(/[-:T]/g,'').slice(0,14);
+    const fileName = `${baseFileName.replace(`.${ext}`,''}_${ts}.${ext}`;
+
+    let tokenResp;
+    try {
+      tokenResp = await msalInstance.acquireTokenSilent({
+        scopes: ['Files.ReadWrite', 'Files.ReadWrite.All'],
+        account: msalInstance.getActiveAccount()
+      });
+    } catch(e) {
+      /* silent token failed, try popup */
+      tokenResp = await msalInstance.acquireTokenPopup({
+        scopes: ['Files.ReadWrite', 'Files.ReadWrite.All']
+      });
+    }
     const token = tokenResp.accessToken;
+
+    /* upload file */
     const uploadUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${ONEDRIVE_FOLDER}/${fileName}:/content`;
     const res = await fetch(uploadUrl, {
       method: 'PUT',
-      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': file.type },
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': file.type||'application/octet-stream' },
       body: file
     });
-    if (!res.ok) throw new Error('Upload failed');
+    if (!res.ok) {
+      const errBody = await res.json().catch(()=>({}));
+      throw new Error(errBody?.error?.message || `Upload failed: ${res.status}`);
+    }
     const data = await res.json();
-    /* get shareable link */
+
+    /* create shareable link */
     const linkRes = await fetch(`https://graph.microsoft.com/v1.0/me/drive/items/${data.id}/createLink`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
