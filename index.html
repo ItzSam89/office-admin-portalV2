@@ -555,15 +555,14 @@ function ManageGroceryCatsModal({cats,onClose,onSaved}){
 
 /* ── MANAGE ITEMS MODAL ── */
 function ManageItemsModal({items,groceryCats,onClose,onSaved}){
+  const UNITS=['kg','litre','pieces','rolls','packs','boxes','bags','dozen'];
+  const CATS=groceryCats.map(c=>typeof c==='string'?c:c.name);
   const [list,setList]=useState(items);
   const [editId,setEditId]=useState(null);
   const [editForm,setEditForm]=useState({});
-  const [addForm,setAddForm]=useState({name:'',unit:'kg',category:''});
-  useEffect(()=>{if(CATS.length>0&&!addForm.category)setAddForm(p=>({...p,category:CATS[0]}))},[CATS.length]);
+  const [addForm,setAddForm]=useState({name:'',unit:'kg',category:CATS[0]||'food'});
   const [adding,setAdding]=useState(false);
   const [saving,setSaving]=useState(false);
-  const UNITS=['kg','litre','pieces','rolls','packs','boxes','bags','dozen'];
-  const CATS=groceryCats.map(c=>typeof c==='string'?c:c.name);
   const IS={background:'var(--surface3)',border:'1px solid var(--border)',color:'var(--text)',padding:'7px 8px',borderRadius:'8px',fontSize:'13px'};
   async function saveEdit(id){setSaving(true);await api('PUT',`/grocery/items/${id}`,editForm);setList(p=>p.map(i=>i.id===id?{...i,...editForm}:i));setEditId(null);setSaving(false);onSaved()}
   async function del(id){if(!confirm('Delete item? Past purchases not affected.'))return;await api('DELETE',`/grocery/items/${id}`);setList(p=>p.filter(i=>i.id!==id));onSaved()}
