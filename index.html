@@ -202,6 +202,29 @@ function pct(a,b){return b>0?Math.min(100,Math.round(a/b*100)):0}
 function today(){return new Date().toISOString().split('T')[0]}
 function floorColor(idx){return FLOOR_COLORS[idx%FLOOR_COLORS.length]}
 
+/* format date as DD-MM-YYYY */
+function fmtDate(d){
+  if(!d)return '—';
+  const dt=new Date(d);
+  if(isNaN(dt))return d;
+  const dd=String(dt.getDate()).padStart(2,'0');
+  const mm=String(dt.getMonth()+1).padStart(2,'0');
+  const yyyy=dt.getFullYear();
+  return `${dd}-${mm}-${yyyy}`;
+}
+
+/* format timestamp as DD-MM-YYYY, HH:MM IST */
+function fmtDateTime(d){
+  if(!d)return '—';
+  const dt=new Date(d);
+  if(isNaN(dt))return d;
+  return dt.toLocaleString('en-IN',{
+    timeZone:'Asia/Kolkata',
+    day:'2-digit',month:'2-digit',year:'numeric',
+    hour:'2-digit',minute:'2-digit',hour12:true
+  });
+}
+
 let _setBackendDown=null;
 async function api(method,path,body){
   try{
@@ -475,7 +498,11 @@ function GroceryTab({month,year,floors,onManageFloors,user}){
             const fb=p.floor_breakdown||[];
             return React.createElement('tr',{key:p.id},
               React.createElement('td',null,React.createElement('div',{className:'fw',style:{fontSize:'13px'}},p.item_name),React.createElement('span',{className:'tag',style:{marginTop:'4px',display:'inline-block'}},p.category)),
-              React.createElement('td',null,React.createElement('div',{className:'td-num'},`${p.qty} ${p.unit}`),React.createElement('div',{style:{fontSize:'10px',color:'var(--muted)',marginTop:'2px'}},p.date)),
+              React.createElement('td',null,
+                React.createElement('div',{className:'td-num'},`${p.qty} ${p.unit}`),
+                React.createElement('div',{style:{fontSize:'10px',color:'var(--muted)',marginTop:'2px'}},fmtDate(p.date)),
+                p.created_at&&React.createElement('div',{style:{fontSize:'10px',color:'var(--dim)',marginTop:'1px'}},fmtDateTime(p.created_at))
+              ),
               React.createElement('td',{className:'td-num'},p.unit_price||p.price?fmt(p.unit_price||p.price):'—'),
               React.createElement('td',{className:'td-num text-accent'},fmt(p.total_cost)),
               React.createElement('td',null,
@@ -844,7 +871,10 @@ function BudgetTab({month,year,user}){
           React.createElement('thead',null,React.createElement('tr',null,['Date','Category','Purpose','Vendor','Amount','Payment','Approved','Added By','Bill',''].map(h=>React.createElement('th',{key:h},h)))),
           React.createElement('tbody',null,filtered.map(s=>
             React.createElement('tr',{key:s.id},
-              React.createElement('td',null,s.date),
+              React.createElement('td',null,
+                React.createElement('div',null,fmtDate(s.date)),
+                s.created_at&&React.createElement('div',{style:{fontSize:'10px',color:'var(--muted)',marginTop:'2px'}},fmtDateTime(s.created_at))
+              ),
               React.createElement('td',null,React.createElement('span',{className:'chip',style:{borderLeft:`3px solid ${s.category_color||'#666'}`}},`${s.category_icon||''} ${s.category_name||'—'}`)),
               React.createElement('td',{style:{maxWidth:'160px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},s.purpose),
               React.createElement('td',{style:{fontSize:'11px',color:'var(--muted)'}},s.vendor||'—'),
