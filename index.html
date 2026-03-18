@@ -215,7 +215,37 @@ async function api(method,path,body){
   }
 }
 
-/* ── SHARED ── */
+/* ── ONEDRIVE UPLOAD via Microsoft Graph ── */
+const ONEDRIVE_FOLDER = 'ADMIN_TEST';
+
+async function uploadToOneDrive(file, fileName) {
+  try {
+    const tokenResp = await msalInstance.acquireTokenSilent({
+      scopes: ['Files.ReadWrite', 'Files.ReadWrite.All'],
+      account: msalInstance.getActiveAccount()
+    });
+    const token = tokenResp.accessToken;
+    const uploadUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${ONEDRIVE_FOLDER}/${fileName}:/content`;
+    const res = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': file.type },
+      body: file
+    });
+    if (!res.ok) throw new Error('Upload failed');
+    const data = await res.json();
+    /* get shareable link */
+    const linkRes = await fetch(`https://graph.microsoft.com/v1.0/me/drive/items/${data.id}/createLink`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'view', scope: 'organization' })
+    });
+    const linkData = await linkRes.json();
+    return linkData.link?.webUrl || data.webUrl;
+  } catch(e) {
+    console.error('OneDrive upload error:', e);
+    throw e;
+  }
+}
 function Spinner(){return React.createElement('div',{className:'spinner'})}
 function StatCard({label,value,sub,color,warn}){
   return React.createElement('div',{className:'stat-card',style:{'--c':color||'var(--accent)'}},
@@ -302,7 +332,7 @@ function ManageFloorsModal({floors,onClose,onSaved}){
 }
 
 /* ── GROCERY TAB ── */
-function GroceryTab({month,year,floors,onManageFloors}){
+function GroceryTab({month,year,floors,onManageFloors,user}){
   const [items,setItems]=useState([]);
   const [purchases,setPurchases]=useState([]);
   const [stats,setStats]=useState(null);
@@ -417,7 +447,7 @@ function GroceryTab({month,year,floors,onManageFloors}){
       React.createElement('div',{className:'table-wrap'},
         React.createElement('table',null,
           React.createElement('thead',null,React.createElement('tr',null,
-            ['Item','Purchased','Unit Cost','Total Cost','Floor Distribution','Distributed','Remaining','Vendor',''].map(h=>React.createElement('th',{key:h},h))
+            ['Item','Purchased','Unit Cost','Total Cost','Floor Distribution','Distributed','Remaining','Vendor','Added By','Bill',''].map(h=>React.createElement('th',{key:h},h))
           )),
           React.createElement('tbody',null,purchases.map(p=>{
             const remPct=pct(p.total_dist,p.qty);
@@ -451,6 +481,27 @@ function GroceryTab({month,year,floors,onManageFloors}){
                 !isOver&&p.remaining===0&&React.createElement('span',{className:'badge badge-amber',style:{marginTop:'4px'}},'Fully assigned')
               ),
               React.createElement('td',{style:{fontSize:'11px',color:'var(--muted)'}},p.vendor||'—'),
+              /* Added by */
+              React.createElement('td',null,
+                p.added_by ? React.createElement('div',{style:{display:'flex',alignItems:'center',gap:'5px'}},
+                  React.createElement('div',{style:{width:'20px',height:'20px',borderRadius:'50%',background:'var(--accent)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'9px',fontWeight:700,color:'white',flexShrink:0}},
+                    (p.added_by||'?').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2)
+                  ),
+                  React.createElement('span',{style:{fontSize:'11px',color:'var(--muted)',maxWidth:'80px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'},title:p.added_by},p.added_by.split(' ')[0])
+                ) : React.createElement('span',{style:{color:'var(--dim)',fontSize:'11px'}},'—')
+              ),
+              /* Bill upload */
+              React.createElement('td',null,
+                React.createElement(BillUploadCell,{
+                  billUrl:p.bill_url,
+                  onUpload:async(file)=>{
+                    const fileName=`Grocery_${p.item_name}_${MONTHS[month-1]}${year}.${file.name.split('.').pop()}`;
+                    const url=await uploadToOneDrive(file,fileName);
+                    await api('PATCH',`/grocery/purchases/${p.id}/bill`,{bill_url:url});
+                    load();
+                  }
+                })
+              ),
               React.createElement('td',null,React.createElement('div',{className:'flex gap-2'},
                 React.createElement('button',{className:'btn btn-ghost btn-sm',onClick:()=>{setEditing(p);setModal('addPurchase')}},'✎'),
                 React.createElement('button',{className:'btn-danger',onClick:()=>delPurchase(p.id)},'✕')
@@ -461,14 +512,14 @@ function GroceryTab({month,year,floors,onManageFloors}){
       )
     ),
 
-    modal==='addPurchase'&&React.createElement(AddPurchaseModal,{items,floors,month,year,existing:editing,onClose:()=>{setModal(null);setEditing(null)},onSaved:()=>{setModal(null);setEditing(null);load()}}),
+    modal==='addPurchase'&&React.createElement(AddPurchaseModal,{items,floors,month,year,existing:editing,user,onClose:()=>{setModal(null);setEditing(null)},onSaved:()=>{setModal(null);setEditing(null);load()}}),
     modal==='manageItems'&&React.createElement(ManageItemsModal,{items,groceryCats,onClose:()=>setModal(null),onSaved:()=>load()}),
     modal==='manageGCats'&&React.createElement(ManageGroceryCatsModal,{cats:groceryCats,onClose:()=>setModal(null),onSaved:()=>load()})
   )
 }
 
 /* ── ADD PURCHASE MODAL ── */
-function AddPurchaseModal({items,floors,month,year,existing,onClose,onSaved}){
+function AddPurchaseModal({items,floors,month,year,existing,user,onClose,onSaved}){
   const initFloors=existing
     ?(existing.floor_breakdown||[]).reduce((acc,f)=>({...acc,[f.floor_id]:f.qty}),{})
     :{};
@@ -488,7 +539,7 @@ function AddPurchaseModal({items,floors,month,year,existing,onClose,onSaved}){
     setSaving(true);
     const floorArr=floors.map(f=>({floor_id:f.id,qty:Number(form.floorQtys[f.id]||0)}));
     if(existing)await api('DELETE',`/grocery/purchases/${existing.id}`);
-    await api('POST','/grocery/purchases',{item_id:+form.item_id,month,year,qty:+form.qty,price:+form.price||0,vendor:form.vendor,date:form.date,notes:form.notes,floors:floorArr});
+    await api('POST','/grocery/purchases',{item_id:+form.item_id,month,year,qty:+form.qty,price:+form.price||0,vendor:form.vendor,date:form.date,notes:form.notes,floors:floorArr,added_by:user?.name||user?.username||null});
     setSaving(false);onSaved();
   }
   const F=(key,opts={})=>React.createElement('input',{value:form[key]||'',onChange:e=>setForm(p=>({...p,[key]:e.target.value})),...opts});
@@ -651,7 +702,7 @@ function ManageItemsModal({items,groceryCats,onClose,onSaved}){
 }
 
 /* ── BUDGET TAB ── */
-function BudgetTab({month,year}){
+function BudgetTab({month,year,user}){
   const [categories,setCategories]=useState([]);
   const [spends,setSpends]=useState([]);
   const [stats,setStats]=useState(null);
@@ -770,7 +821,7 @@ function BudgetTab({month,year}){
       ):
       React.createElement('div',{className:'table-wrap'},
         React.createElement('table',null,
-          React.createElement('thead',null,React.createElement('tr',null,['Date','Category','Purpose','Vendor','Amount','Payment','Approved',''].map(h=>React.createElement('th',{key:h},h)))),
+          React.createElement('thead',null,React.createElement('tr',null,['Date','Category','Purpose','Vendor','Amount','Payment','Approved','Added By','Bill',''].map(h=>React.createElement('th',{key:h},h)))),
           React.createElement('tbody',null,filtered.map(s=>
             React.createElement('tr',{key:s.id},
               React.createElement('td',null,s.date),
@@ -780,6 +831,27 @@ function BudgetTab({month,year}){
               React.createElement('td',{className:'td-num text-accent'},fmt(s.amt)),
               React.createElement('td',null,React.createElement('span',{className:'badge badge-blue'},s.mode||s.payment_mode||'—')),
               React.createElement('td',{style:{fontSize:'11px',color:'var(--muted)'}},s.approved||'—'),
+              /* Added by */
+              React.createElement('td',null,
+                s.added_by?React.createElement('div',{style:{display:'flex',alignItems:'center',gap:'5px'}},
+                  React.createElement('div',{style:{width:'20px',height:'20px',borderRadius:'50%',background:'var(--accent)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'9px',fontWeight:700,color:'white',flexShrink:0}},
+                    (s.added_by||'?').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2)
+                  ),
+                  React.createElement('span',{style:{fontSize:'11px',color:'var(--muted)',maxWidth:'80px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'},title:s.added_by},s.added_by.split(' ')[0])
+                ):React.createElement('span',{style:{color:'var(--dim)',fontSize:'11px'}},'—')
+              ),
+              /* Bill */
+              React.createElement('td',null,
+                React.createElement(BillUploadCell,{
+                  billUrl:s.bill_url,
+                  onUpload:async(file)=>{
+                    const fileName=`Budget_${s.purpose.slice(0,20).replace(/\s+/g,'_')}_${MONTHS[month-1]}${year}.${file.name.split('.').pop()}`;
+                    const url=await uploadToOneDrive(file,fileName);
+                    await api('PATCH',`/budget/spends/${s.id}/bill`,{bill_url:url});
+                    load();
+                  }
+                })
+              ),
               React.createElement('td',null,React.createElement('div',{className:'flex gap-2'},
                 React.createElement('button',{className:'btn btn-ghost btn-sm',onClick:()=>{setEditSpend(s);setModal('addSpend')}},'✎'),
                 React.createElement('button',{className:'btn-danger',onClick:()=>delSpend(s.id)},'✕')
@@ -789,13 +861,13 @@ function BudgetTab({month,year}){
         )
       )
     ),
-    modal==='addSpend'&&React.createElement(AddSpendModal,{categories,month,year,existing:editSpend,onClose:()=>{setModal(null);setEditSpend(null)},onSaved:()=>{setModal(null);setEditSpend(null);load()}}),
+    modal==='addSpend'&&React.createElement(AddSpendModal,{categories,month,year,existing:editSpend,user,onClose:()=>{setModal(null);setEditSpend(null)},onSaved:()=>{setModal(null);setEditSpend(null);load()}}),
     modal==='setBudgets'&&React.createElement(SetBudgetsModal,{categories,month,year,onClose:()=>setModal(null),onSaved:()=>{setModal(null);load()}}),
     modal==='manageCategories'&&React.createElement(ManageCategoriesModal,{categories,onClose:()=>setModal(null),onSaved:()=>load()})
   )
 }
 
-function AddSpendModal({categories,month,year,existing,onClose,onSaved}){
+function AddSpendModal({categories,month,year,existing,user,onClose,onSaved}){
   const [form,setForm]=useState(existing?{category_id:existing.cat||existing.category_id||'',date:existing.date||today(),amt:existing.amt||'',purpose:existing.purpose||'',mode:existing.mode||'cash',vendor:existing.vendor||'',invoice:existing.invoice||'',approved:existing.approved||'',notes:existing.notes||''}:{category_id:'',date:today(),amt:'',purpose:'',mode:'cash',vendor:'',invoice:'',approved:'',notes:''});
   const [saving,setSaving]=useState(false);
   const F=(key,opts={})=>React.createElement('input',{value:form[key]||'',onChange:e=>setForm(p=>({...p,[key]:e.target.value})),...opts});
@@ -804,7 +876,7 @@ function AddSpendModal({categories,month,year,existing,onClose,onSaved}){
     const d=new Date(form.date);
     if((d.getMonth()+1)!==month||d.getFullYear()!==year){if(!confirm(`Date is outside ${MONTHS[month-1]} ${year}. Save anyway?`))return}
     setSaving(true);
-    const payload={cat:+form.category_id||0,date:form.date,amt:+form.amt,purpose:form.purpose,mode:form.mode,vendor:form.vendor,invoice:form.invoice,approved:form.approved,notes:form.notes};
+    const payload={cat:+form.category_id||0,date:form.date,amt:+form.amt,purpose:form.purpose,mode:form.mode,vendor:form.vendor,invoice:form.invoice,approved:form.approved,notes:form.notes,added_by:user?.name||user?.username||null};
     if(existing)await api('PUT',`/budget/spends/${existing.id}`,payload);
     else await api('POST','/budget/spends',payload);
     setSaving(false);onSaved();
@@ -907,6 +979,40 @@ function ManageCategoriesModal({categories,onClose,onSaved}){
   )
 }
 
+/* ── BILL UPLOAD CELL ── */
+function BillUploadCell({billUrl, onUpload}){
+  const [uploading,setUploading]=useState(false);
+  const [error,setError]=useState(null);
+  const ref=React.useRef();
+
+  async function handleFile(e){
+    const file=e.target.files[0];
+    if(!file)return;
+    setUploading(true);setError(null);
+    try{
+      await onUpload(file);
+    }catch(err){
+      setError('Upload failed');
+      console.error(err);
+    }
+    setUploading(false);
+    e.target.value='';
+  }
+
+  if(uploading) return React.createElement('span',{style:{fontSize:'11px',color:'var(--accent)'}},'Uploading...');
+
+  return React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:'4px'}},
+    billUrl
+      ? React.createElement('div',{style:{display:'flex',gap:'4px',alignItems:'center'}},
+          React.createElement('a',{href:billUrl,target:'_blank',style:{fontSize:'11px',color:'var(--accent2)',textDecoration:'none',display:'flex',alignItems:'center',gap:'3px'}},'📎 View Bill'),
+          React.createElement('button',{className:'btn btn-ghost btn-sm',style:{padding:'2px 6px',fontSize:'10px'},onClick:()=>ref.current.click()},'↑')
+        )
+      : React.createElement('button',{className:'btn btn-ghost btn-sm',style:{fontSize:'10px',padding:'4px 8px'},onClick:()=>ref.current.click()},'📎 Upload'),
+    error&&React.createElement('span',{style:{fontSize:'10px',color:'var(--red)'}},error),
+    React.createElement('input',{ref,type:'file',accept:'image/*,.pdf',style:{display:'none'},onChange:handleFile})
+  )
+}
+
 /* ── APP ROOT ── */
 function App(){
   const [user,setUser]=useState(null);
@@ -1003,8 +1109,8 @@ function App(){
         React.createElement('input',{type:'number',value:year,onChange:e=>setYear(+e.target.value),style:{width:'88px'}}),
         React.createElement('span',{style:{fontSize:'12px',color:'var(--muted)'}},`Data shown: ${MONTHS[month-1]} ${year} only`)
       ),
-      tab==='grocery'&&React.createElement(GroceryTab,{month,year,floors,onManageFloors:()=>setShowManageFloors(true)}),
-      tab==='budget'&&React.createElement(BudgetTab,{month,year})
+      tab==='grocery'&&React.createElement(GroceryTab,{month,year,floors,user,onManageFloors:()=>setShowManageFloors(true)}),
+      tab==='budget'&&React.createElement(BudgetTab,{month,year,user})
     ),
 
     showManageFloors&&React.createElement(ManageFloorsModal,{floors,onClose:()=>setShowManageFloors(false),onSaved:()=>{loadFloors();setShowManageFloors(false)}})
